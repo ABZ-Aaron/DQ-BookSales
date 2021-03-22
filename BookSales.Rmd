@@ -1,0 +1,348 @@
+---
+title: "Book Sales 2019"
+author: "Aaron Wright"
+date: "22/03/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(lubridate)
+```
+
+
+# Book Sales
+
+The purpose of this project is to further enhance my `R` skills, and practice a few data processing techniques.
+
+Let's start by taking a look at the data.
+
+```{r}
+# Read in data
+books <- read_csv("sales2019.csv", col_types = cols())
+```
+
+```{r}
+# Taking a look at the data
+glimpse(books)
+```
+There are **5** columns and **5000** rows. The columns are all of type character except for `total_purchased` which is of type double.
+
+The data colums appear to represent:
+
+* date: the date reviews were left
+* user_submitted_revew: review left by the customer
+* title: title of the book
+* total_purchased: number of books purchased by customer
+* customer_type: type of customer
+
+We can also extract this information using different technqiues, such as:
+
+```{r}
+# Number of colums and rows
+dim(books)
+
+# Number of rows
+nrow(books)
+
+# Number of columns
+ncol(books)
+
+# Column names
+names(books)
+```
+We can also discover the unique values for each column
+
+```{r}
+# Return all unique values for each column, excluding the data column
+for (col in names(books)) {
+  if (col != "date") {
+    print(unique(books[[col]]))
+  }
+}
+```
+We can also extract some useful info using the summary function
+
+```{r}
+summary(books)
+```
+We can also check the top 5 or bottom 5 rows
+
+```{r}
+# Top 5 rows
+head(books)
+
+# Bottom 5 rows
+tail(books)
+```
+We can immediately see from the above that there are na values in the data. There are other ways of identifying whether or not the data contains na values
+
+```{r}
+sapply(books, anyNA)
+```
+We can see from this that two columns have NA values present in them. It appears now every record has a user submitted review, and the total purchases is also omitted.
+
+Let's examine this a bit closer
+
+```{r}
+# Using the filter function to extract on only rows where user submitted review is na
+na_books_submitted <- books %>% filter(is.na(user_submitted_review))
+
+# Groups by title where user submitted review are na
+count(na_books_submitted, title, sort = T)
+```
+We can do the same for the total purchased column
+
+```{r}
+
+na_books_purchased <- books %>% filter(is.na(total_purchased))
+count(na_books_purchased, title, sort = T)
+```
+For the purposes of this project, we're going to just remove all rows that have NA values for `user_submitted_review`. However, we won't do the same for `total_purchased` as we want to retain as much info as we can here (given this is the target variable).
+
+Rather than remove values from this column, we're going to calcualte the average for the column and use this to replace the NA values.
+
+Let's start by removing rows with NA values for `user_submitted_review`
+
+
+```{r}
+# Remove rows where user submitted review is empty
+complete_sales <- books %>% filter(!(is.na(user_submitted_review)))
+nrow(complete_sales)
+```
+
+```{r}
+# How many rows were removed
+nrow(books) - nrow(complete_sales)
+```
+Let's now check the average number of books purchased per order. We'll need to exclude the NA values for this to work.
+
+```{r}
+# Filter out na values, return total_purchased column and pass it to mean function
+purchase_mean <- complete_sales %>%
+                  filter(!(is.na(total_purchased))) %>%
+                    pull(total_purchased) %>%
+                      mean
+                    
+purchase_mean
+```
+
+Now, we're going to create a new column which will be a duplicate of `total_purchased`. However, we will replace all NA values with the mean calculated above.
+
+```{r}
+# Create new column which replaces na values with the mean of purchase column
+complete_sales <- complete_sales %>%
+                    mutate(complete_purchased = if_else(is.na(total_purchased), purchase_mean, total_purchased))
+
+head(select(complete_sales, total_purchased, complete_purchased))
+```
+
+We can now drop the total_purchased column
+
+```{r}
+# Drop the total purchased column
+complete_sales <- complete_sales %>%
+                    select(-total_purchased)
+```
+
+Let's now try to create a new column that tells us whether a review is positive or not
+
+```{r}
+# Return unique values in user submitted reviews
+unique(complete_sales$user_submitted_review)
+```
+From this, we can see what is negative or positive
+
+### Positive
+
+* it was okay
+* Awesome!
+* Never read a better book
+* OK
+* I learned a lot
+
+### Negative
+
+* Hated it
+* The author's other books were better
+* A lot of material was not needed
+* Would not recommend
+
+Let's create a rule that if the words `okay`, `OK`, `Never`, `learned`, or `Awesome` exist, then the review is positive. All others we will class as negative.
+
+```{r}
+complete_sales <- complete_sales %>%
+                  mutate(
+                    review_type = if_else(
+                      str_detect(user_submitted_review, "okay|OK|Never|learned|Awesome!"), "Positive", "Negative"
+                    )
+                  )
+```
+
+```{r}
+head(select(complete_sales, user_submitted_review, review_type), 10)
+```
+
+
+We could have done this a slightly different way, as below. Here we create a function that takes a string as input. It'll then assign T or F to a variable depending on what's contained in that string.
+
+We then pass our dataframe to the `mutate` function where we create new column. For this new column we use `map` to map the function to the `user_submitted_review` column. Because this returns a list, we also apply the `unlist` function unlist this.
+
+```{r}
+# Create function to determine whether a review is positive or not
+positive_review <- function(review) {
+  rp = case_when(
+    str_detect(review, "okay") ~ T,
+    str_detect(review, "OK") ~ T,
+    str_detect(review, "Never") ~ T,
+    str_detect(review, "learned") ~ T,
+    str_detect(review, "Awesome!") ~ T,
+    TRUE ~ F
+  )
+}
+
+# Apply function to create new column
+complete_sales <- complete_sales %>%
+                  mutate(
+                    review_type_two = unlist(map(user_submitted_review, positive_review))
+                  )
+
+head(select(complete_sales, user_submitted_review, review_type, review_type_two), 10)
+                    
+```
+
+Let's now take a look at the data column. We want to convert these string values to data-time.
+
+```{r}
+head(complete_sales$date)
+```
+We can see that the dates are of format Month/Day/Year. Thus we might want to use the function `mdy`
+
+```{r}
+# Convert strings to dates
+complete_sales <- complete_sales %>% 
+                  mutate(
+                    date = mdy(date)
+                  )
+```
+
+Let's now distinguish between sales that happened before July 1, 2019. This is when a new book program came into place
+
+```{r}
+# Specify program date
+program_date <- mdy("07/01/19")
+
+# Create new column letting us know if date is before or after the program implementation date
+complete_sales <- complete_sales %>%
+                  mutate(
+                    the_program_date = if_else(date < program_date, "Before", "After")
+                  )
+
+head(select(complete_sales, date, the_program_date), 10)
+```
+
+Let's now create a summary table
+
+```{r}
+summary_table <- complete_sales %>%
+                 group_by(the_program_date) %>% 
+                 summarise(total = sum(complete_purchased))
+
+summary_table
+```
+
+We can see that the program was not effective. However, maybe the program has increaesed sales for certain book types. We might also want to look at customer type.
+
+```{r}
+summary_table <- complete_sales %>%
+                 group_by(the_program_date, customer_type) %>% 
+                 summarise(total = sum(complete_purchased))
+
+summary_table
+```
+
+We can see that sales have increased after the program implementation for businesses, but not for customers.
+
+```{r}
+summary_table <- complete_sales %>%
+                 group_by(the_program_date, title) %>% 
+                 summarize(total = sum(complete_purchased))
+
+summary_table
+```
+
+We can see here that a couple of books have increased in sales since implementation of the program, whereas some have dropped.
+
+Let's now take a closer look at review. We want to know if review scores improved as a result of the program
+
+
+```{r}
+complete_sales %>% 
+  group_by(the_program_date) %>% 
+  summarize(
+    num_positive_reviews = sum(review_type_two)
+  )
+```
+
+We can see that there were more positive reviews before than after the program, but the difference is small.
+
+Let's revisit some of the stuff we've done here. We imputed all of the missing purchase quantity values using just the average purchase quantity in the entire dataset. This worked out for us, but it totally eliminates any information about the books themselves. It might be better to compute the average purchase quantity for each book instead, and impute these values for the books instead.
+
+```{r}
+glimpse(complete_sales)
+```
+```{r}
+unique(books$title)
+```
+
+We could do this a little something like this. Here we have just hardcoded values in which is bad practice. The below approach wouldn't be feasbile if we had 100s of books to deal with.
+
+```{r}
+SOR <- books %>%
+                  filter(!(is.na(total_purchased))) %>%
+                  filter(title == "Secrets Of R For Advanced Students") %>%
+                    pull(total_purchased) %>%
+                      mean
+
+RFD <- books %>%
+                  filter(!(is.na(total_purchased))) %>%
+                  filter(title == "R For Dummies") %>%
+                    pull(total_purchased) %>%
+                      mean
+FOR <- books %>%
+                  filter(!(is.na(total_purchased))) %>%
+                  filter(title == "Fundamentals of R For Beginners") %>%
+                    pull(total_purchased) %>%
+                      mean
+RVP <- books %>%
+                  filter(!(is.na(total_purchased))) %>%
+                  filter(title == "R vs Python: An Essay") %>%
+                    pull(total_purchased) %>%
+                      mean
+TTM <- books %>%
+                  filter(!(is.na(total_purchased))) %>%
+                  filter(title == "Top 10 Mistakes R Beginners Make") %>%
+                    pull(total_purchased) %>%
+                      mean
+RME <- books %>%
+                  filter(!(is.na(total_purchased))) %>%
+                  filter(title == "R Made Easy") %>%
+                    pull(total_purchased) %>%
+                      mean
+
+books <- books %>%
+                    mutate(complete_purchased = case_when(
+                      is.na(total_purchased) & title == "Secrets Of R For Advanced Students" ~ SOR,
+                      is.na(total_purchased) & title == "R For Dummies" ~ RFD,
+                      is.na(total_purchased) & title == "Fundamentals of R For Beginners" ~ FOR,
+                      is.na(total_purchased) & title == "R vs Python: An Essay" ~ RVP,
+                      is.na(total_purchased) & title == "Top 10 Mistakes R Beginners Make" ~ TTM,
+                      is.na(total_purchased) & title == "R Made Easy" ~ RME,
+                      TRUE ~ total_purchased
+                    ))
+                            
+```
+
+```{r}
